@@ -29,7 +29,7 @@ jobs:
       - name: Install Python dependencies
         working-directory: claimer
         run: |
-          pip3 install puppeteer schedule requests apscheduler==3.7.0
+          pip3 install pyppeteer schedule requests apscheduler==3.7.0
       - name: Run Epic Games Claimer
         working-directory: claimer
         run: |
@@ -37,5 +37,3 @@ jobs:
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
-          PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
-          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
