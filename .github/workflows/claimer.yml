@@ -19,66 +19,96 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install epicstore_api requests
+          pip install epicstore_api requests pyotp
 
-      - name: Claim free games
+      - name: Claim free games via epicstore_api
         env:
           EMAIL: ${{ secrets.EMAIL }}
-          EXCHANGE_CODE: ${{ secrets.EXCHANGE_CODE }}
+          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
         run: |
-          python - <<'EOF'
+          python - <<'PYEOF'
           import os
+          import time
+          import pyotp
           import requests
           import json
 
-          exchange_code = os.environ['EXCHANGE_CODE']
-          email = os.environ['EMAIL']
+          EMAIL = os.environ['EMAIL']
+          TOTP_SECRET = os.environ.get('TOTP_SECRET', '')
 
-          # Exchange the code for a session token
-          token_url = "https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token"
-          auth = ("875a3b57d3a640a6b7f9b4e883463ab4", "MzI2OTk4NDc4NjI0NDMyZTMxMWM1NzhiNGVjOGE3NWI=")
-          data = {
-              "grant_type": "exchange_code",
-              "exchange_code": exchange_code,
-              "token_type": "eg1"
-          }
-          resp = requests.post(token_url, auth=auth, data=data)
+          # Step 1: Initiate password-less login via Epic device auth
+          # We use the Launcher client credentials
+          LAUNCHER_CLIENT_ID = '34a02cf8f4414e29b15921876da36f9'
+          LAUNCHER_CLIENT_SECRET = 'daafbccc737745039dffe53d94fc76cf'
+
+          # Get launcher token first
+          token_url = 'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token'
+          resp = requests.post(
+              token_url,
+              auth=(LAUNCHER_CLIENT_ID, LAUNCHER_CLIENT_SECRET),
+              data={'grant_type': 'client_credentials', 'token_type': 'eg1'}
+          )
           resp.raise_for_status()
-          token_data = resp.json()
+          client_token = resp.json()['access_token']
+          print('Got client credentials token')
+
+          # Step 2: Use exchange code from environment
+          EXCHANGE_CODE = os.environ.get('EXCHANGE_CODE', '')
+          if not EXCHANGE_CODE:
+              print('ERROR: No EXCHANGE_CODE available')
+              exit(1)
+
+          # Exchange for user token
+          user_resp = requests.post(
+              token_url,
+              auth=(LAUNCHER_CLIENT_ID, LAUNCHER_CLIENT_SECRET),
+              data={
+                  'grant_type': 'exchange_code',
+                  'exchange_code': EXCHANGE_CODE,
+                  'token_type': 'eg1'
+              }
+          )
+          if user_resp.status_code != 200:
+              print(f'Token exchange failed: {user_resp.text}')
+              exit(1)
+
+          token_data = user_resp.json()
           access_token = token_data['access_token']
           account_id = token_data['account_id']
-          print(f"Logged in as account: {account_id}")
+          print(f'Logged in! Account ID: {account_id}')
 
-          # Get free games from Epic Games Store
-          store_url = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
-          store_resp = requests.get(store_url, params={"locale": "en-US", "country": "IN", "allowCountries": "IN"})
+          # Step 3: Get free games
+          store_resp = requests.get(
+              'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions',
+              params={'locale': 'en-US', 'country': 'IN', 'allowCountries': 'IN'}
+          )
           games = store_resp.json()['data']['Catalog']['searchStore']['elements']
+          headers = {'Authorization': f'Bearer {access_token}'}
 
-          headers = {"Authorization": f"Bearer {access_token}"}
           claimed = []
           for game in games:
               promotions = game.get('promotions') or {}
-              offers = promotions.get('promotionalOffers', [])
-              for offer_group in offers:
+              for offer_group in promotions.get('promotionalOffers', []):
                   for offer in offer_group.get('promotionalOffers', []):
                       if offer.get('discountSetting', {}).get('discountPercentage', 100) == 0:
-                          namespace = game.get('namespace')
-                          offer_id = game.get('id')
+                          ns = game.get('namespace')
+                          oid = game.get('id')
                           title = game.get('title', 'Unknown')
-                          order_url = f"https://store-launcher.epicgames.com/purchase"
-                          order_data = {
-                              "salesChannel": "Launcher-purchase-client",
-                              "appStore": "EpicGames",
-                              "appType": "client",
-                              "offers": [{"offerId": offer_id, "namespace": namespace}]
-                          }
                           order_resp = requests.post(
-                              "https://store-launcher.epicgames.com/purchase",
+                              'https://store-launcher.epicgames.com/purchase',
                               headers=headers,
-                              json=order_data
+                              json={
+                                  'salesChannel': 'Launcher-purchase-client',
+                                  'appStore': 'EpicGames',
+                                  'appType': 'client',
+                                  'offers': [{'offerId': oid, 'namespace': ns}]
+                              }
                           )
-                          print(f"Claimed: {title} - Status: {order_resp.status_code}")
+                          print(f'Game: {title} | Status: {order_resp.status_code}')
                           claimed.append(title)
 
-          print(f"Total games processed: {len(claimed)}")
-          EOF
+          print(f'Done! Total free games processed: {len(claimed)}')
+          PYEOF
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          EXCHANGE_CODE: ${{ secrets.EXCHANGE_CODE }}
