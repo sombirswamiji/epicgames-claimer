@@ -9,34 +9,76 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          repository: grbnb/epicgames-claimer
-          path: claimer
+        uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-      - name: Write cookies to file
+          python-version: '3.11'
+
+      - name: Install dependencies
         run: |
-          echo "$COOKIES_JSON" | base64 -d > claimer/cookies.json
+          python -m pip install --upgrade pip
+          pip install epicstore_api requests
+
+      - name: Claim free games
         env:
-          COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
-      - name: Install system dependencies
-        working-directory: claimer
+          EMAIL: ${{ secrets.EMAIL }}
+          EXCHANGE_CODE: ${{ secrets.EXCHANGE_CODE }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb chromium-browser tzdata ffmpeg ibus-gtk3 libgbm1 libasound2t64
-      - name: Set timezone
-        run: |
-          sudo timedatectl set-timezone Asia/Kolkata
-      - name: Install Python dependencies
-        working-directory: claimer
-        run: |
-          pip3 install pyppeteer schedule requests
-      - name: Run Epic Games Claimer with cookies
-        working-directory: claimer
-        run: |
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python3 epicgames_claimer.py --cookies cookies.json --no-headless --once
-        env:
-          PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+          python - <<'EOF'
+          import os
+          import requests
+          import json
+
+          exchange_code = os.environ['EXCHANGE_CODE']
+          email = os.environ['EMAIL']
+
+          # Exchange the code for a session token
+          token_url = "https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token"
+          auth = ("875a3b57d3a640a6b7f9b4e883463ab4", "MzI2OTk4NDc4NjI0NDMyZTMxMWM1NzhiNGVjOGE3NWI=")
+          data = {
+              "grant_type": "exchange_code",
+              "exchange_code": exchange_code,
+              "token_type": "eg1"
+          }
+          resp = requests.post(token_url, auth=auth, data=data)
+          resp.raise_for_status()
+          token_data = resp.json()
+          access_token = token_data['access_token']
+          account_id = token_data['account_id']
+          print(f"Logged in as account: {account_id}")
+
+          # Get free games from Epic Games Store
+          store_url = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
+          store_resp = requests.get(store_url, params={"locale": "en-US", "country": "IN", "allowCountries": "IN"})
+          games = store_resp.json()['data']['Catalog']['searchStore']['elements']
+
+          headers = {"Authorization": f"Bearer {access_token}"}
+          claimed = []
+          for game in games:
+              promotions = game.get('promotions') or {}
+              offers = promotions.get('promotionalOffers', [])
+              for offer_group in offers:
+                  for offer in offer_group.get('promotionalOffers', []):
+                      if offer.get('discountSetting', {}).get('discountPercentage', 100) == 0:
+                          namespace = game.get('namespace')
+                          offer_id = game.get('id')
+                          title = game.get('title', 'Unknown')
+                          order_url = f"https://store-launcher.epicgames.com/purchase"
+                          order_data = {
+                              "salesChannel": "Launcher-purchase-client",
+                              "appStore": "EpicGames",
+                              "appType": "client",
+                              "offers": [{"offerId": offer_id, "namespace": namespace}]
+                          }
+                          order_resp = requests.post(
+                              "https://store-launcher.epicgames.com/purchase",
+                              headers=headers,
+                              json=order_data
+                          )
+                          print(f"Claimed: {title} - Status: {order_resp.status_code}")
+                          claimed.append(title)
+
+          print(f"Total games processed: {len(claimed)}")
+          EOF
