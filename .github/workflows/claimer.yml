@@ -33,7 +33,7 @@ jobs:
       - name: Run Epic Games Claimer
         working-directory: claimer
         run: |
-          xvfb-run --auto-servernum python3 epicgames_claimer.py -e "$EMAIL" -p "$PASSWORD" --once
+          xvfb-run --auto-servernum python3 epicgames_claimer.py -u "$EMAIL" -p "$PASSWORD" --once
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
