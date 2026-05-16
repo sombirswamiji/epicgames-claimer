@@ -37,11 +37,12 @@ jobs:
 
           LAUNCHER_ID = '34a02cf8f4414e29b15921876da36f9'
           LAUNCHER_SECRET = 'daafbccc737745039dffe53d94fc76cf'
+          WEB_CLIENT_ID = '875a3b57d3a640a6b7f9b4e883463ab4'
           TOKEN_URL = 'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token'
 
           token_data = None
 
-          # Try refresh_token first (persistent - does not expire quickly)
+          # Method 1: Try refresh_token (persistent, best for scheduled runs)
           if REFRESH_TOKEN:
               print('Attempting login with REFRESH_TOKEN...')
               resp = requests.post(
@@ -58,30 +59,45 @@ jobs:
                   print('Login successful via REFRESH_TOKEN!')
               else:
                   print(f'REFRESH_TOKEN login failed: {resp.text}')
-                  print('Falling back to EXCHANGE_CODE...')
 
-          # Fall back to exchange_code
+          # Method 2: Try authorization_code with web client (from /api/redirect endpoint)
           if not token_data and EXCHANGE_CODE:
-              print('Attempting login with EXCHANGE_CODE...')
+              print('Attempting login with authorization_code (web client)...')
               resp = requests.post(
                   TOKEN_URL,
-                  auth=(LAUNCHER_ID, LAUNCHER_SECRET),
+                  auth=(WEB_CLIENT_ID, ''),
                   data={
-                      'grant_type': 'exchange_code',
-                      'exchange_code': EXCHANGE_CODE,
+                      'grant_type': 'authorization_code',
+                      'code': EXCHANGE_CODE,
                       'token_type': 'eg1'
                   }
               )
               if resp.status_code == 200:
                   token_data = resp.json()
-                  print('Login successful via EXCHANGE_CODE!')
+                  print('Login successful via authorization_code!')
               else:
-                  print(f'EXCHANGE_CODE login failed: {resp.text}')
+                  print(f'authorization_code login failed: {resp.text}')
+                  # Method 3: Try exchange_code with launcher client
+                  print('Attempting login with exchange_code (launcher client)...')
+                  resp2 = requests.post(
+                      TOKEN_URL,
+                      auth=(LAUNCHER_ID, LAUNCHER_SECRET),
+                      data={
+                          'grant_type': 'exchange_code',
+                          'exchange_code': EXCHANGE_CODE,
+                          'token_type': 'eg1'
+                      }
+                  )
+                  if resp2.status_code == 200:
+                      token_data = resp2.json()
+                      print('Login successful via exchange_code!')
+                  else:
+                      print(f'exchange_code login failed: {resp2.text}')
 
           if not token_data:
               print('ERROR: All login methods failed.')
-              print('ACTION REQUIRED: Go to https://www.epicgames.com/id/api/redirect?clientId=875a3b57d3a640a6b7f9b4e883463ab4&responseType=code')
-              print('Copy the exchangeCode value and update the EXCHANGE_CODE secret in GitHub.')
+              print('ACTION REQUIRED: Visit https://www.epicgames.com/id/api/redirect?clientId=875a3b57d3a640a6b7f9b4e883463ab4&responseType=code')
+              print('Copy the authorizationCode value and update the EXCHANGE_CODE secret in GitHub.')
               exit(1)
 
           access_token = token_data['access_token']
@@ -90,7 +106,7 @@ jobs:
 
           print(f'Logged in! Account: {account_id}')
           if new_refresh_token:
-              print(f'NEW REFRESH TOKEN (update REFRESH_TOKEN secret): {new_refresh_token}')
+              print(f'SAVE THIS as REFRESH_TOKEN secret: {new_refresh_token}')
 
           # Fetch free games
           store_resp = requests.get(
