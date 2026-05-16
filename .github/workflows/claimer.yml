@@ -32,13 +32,10 @@ jobs:
           pip3 install pyppeteer schedule requests apscheduler==3.7.0
       - name: Run Epic Games Claimer
         working-directory: claimer
+        run: |
+          xvfb-run --auto-servernum python3 epicgames_claimer.py -e "$EMAIL" -p "$PASSWORD" --once
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
-          VERIFICATION_CODE: ${{ secrets.VERIFICATION_CODE }}
           PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
           PYPPETEER_NO_DOWNLOAD: '1'
-        run: |
-          chmod +x epicgames_claimer.py
-          xvfb-run --auto-servernum python3 epicgames_claimer.py --email "$EMAIL" --password "$PASSWORD" --once --de
-          echo "Claim process finished"
