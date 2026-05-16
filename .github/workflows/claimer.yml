@@ -7,6 +7,9 @@ on:
 jobs:
   claim:
     runs-on: ubuntu-latest
+    env:
+      EMAIL: ${{ secrets.EMAIL }}
+      EXCHANGE_CODE: ${{ secrets.EXCHANGE_CODE }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -19,65 +22,43 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install epicstore_api requests pyotp
+          pip install requests
 
-      - name: Claim free games via epicstore_api
-        env:
-          EMAIL: ${{ secrets.EMAIL }}
-          TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
+      - name: Claim free games
         run: |
           python - <<'PYEOF'
           import os
-          import time
-          import pyotp
           import requests
-          import json
 
           EMAIL = os.environ['EMAIL']
-          TOTP_SECRET = os.environ.get('TOTP_SECRET', '')
+          EXCHANGE_CODE = os.environ['EXCHANGE_CODE']
 
-          # Step 1: Initiate password-less login via Epic device auth
-          # We use the Launcher client credentials
-          LAUNCHER_CLIENT_ID = '34a02cf8f4414e29b15921876da36f9'
-          LAUNCHER_CLIENT_SECRET = 'daafbccc737745039dffe53d94fc76cf'
+          LAUNCHER_ID = '34a02cf8f4414e29b15921876da36f9'
+          LAUNCHER_SECRET = 'daafbccc737745039dffe53d94fc76cf'
+          TOKEN_URL = 'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token'
 
-          # Get launcher token first
-          token_url = 'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token'
+          # Exchange code for user access token
           resp = requests.post(
-              token_url,
-              auth=(LAUNCHER_CLIENT_ID, LAUNCHER_CLIENT_SECRET),
-              data={'grant_type': 'client_credentials', 'token_type': 'eg1'}
-          )
-          resp.raise_for_status()
-          client_token = resp.json()['access_token']
-          print('Got client credentials token')
-
-          # Step 2: Use exchange code from environment
-          EXCHANGE_CODE = os.environ.get('EXCHANGE_CODE', '')
-          if not EXCHANGE_CODE:
-              print('ERROR: No EXCHANGE_CODE available')
-              exit(1)
-
-          # Exchange for user token
-          user_resp = requests.post(
-              token_url,
-              auth=(LAUNCHER_CLIENT_ID, LAUNCHER_CLIENT_SECRET),
+              TOKEN_URL,
+              auth=(LAUNCHER_ID, LAUNCHER_SECRET),
               data={
                   'grant_type': 'exchange_code',
                   'exchange_code': EXCHANGE_CODE,
                   'token_type': 'eg1'
               }
           )
-          if user_resp.status_code != 200:
-              print(f'Token exchange failed: {user_resp.text}')
+          if resp.status_code != 200:
+              print(f'Login failed: {resp.text}')
               exit(1)
 
-          token_data = user_resp.json()
+          token_data = resp.json()
           access_token = token_data['access_token']
           account_id = token_data['account_id']
-          print(f'Logged in! Account ID: {account_id}')
+          refresh_token = token_data.get('refresh_token', 'N/A')
+          print(f'Logged in! Account: {account_id}')
+          print(f'Refresh token (save for future): {refresh_token}')
 
-          # Step 3: Get free games
+          # Fetch free games
           store_resp = requests.get(
               'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions',
               params={'locale': 'en-US', 'country': 'IN', 'allowCountries': 'IN'}
@@ -88,13 +69,13 @@ jobs:
           claimed = []
           for game in games:
               promotions = game.get('promotions') or {}
-              for offer_group in promotions.get('promotionalOffers', []):
-                  for offer in offer_group.get('promotionalOffers', []):
+              for og in promotions.get('promotionalOffers', []):
+                  for offer in og.get('promotionalOffers', []):
                       if offer.get('discountSetting', {}).get('discountPercentage', 100) == 0:
                           ns = game.get('namespace')
                           oid = game.get('id')
                           title = game.get('title', 'Unknown')
-                          order_resp = requests.post(
+                          r = requests.post(
                               'https://store-launcher.epicgames.com/purchase',
                               headers=headers,
                               json={
@@ -104,11 +85,8 @@ jobs:
                                   'offers': [{'offerId': oid, 'namespace': ns}]
                               }
                           )
-                          print(f'Game: {title} | Status: {order_resp.status_code}')
+                          print(f'{title}: {r.status_code}')
                           claimed.append(title)
 
-          print(f'Done! Total free games processed: {len(claimed)}')
+          print(f'Total games processed: {len(claimed)}')
           PYEOF
-        env:
-          EMAIL: ${{ secrets.EMAIL }}
-          EXCHANGE_CODE: ${{ secrets.EXCHANGE_CODE }}
