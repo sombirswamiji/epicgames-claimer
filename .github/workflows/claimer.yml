@@ -8,114 +8,91 @@ jobs:
   claim:
     runs-on: ubuntu-latest
     env:
-      EMAIL: ${{ secrets.EMAIL }}
       REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
       EXCHANGE_CODE: ${{ secrets.EXCHANGE_CODE }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
+      - name: Login and claim free games
         run: |
-          python -m pip install --upgrade pip
-          pip install requests
+          LAUNCHER_ID="34a02cf8f4414e29b15921876da36f9"
+          LAUNCHER_SECRET="daafbccc737745039dffe53d94fc76cf"
+          WEB_CLIENT_ID="875a3b57d3a640a6b7f9b4e883463ab4"
+          TOKEN_URL="https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token"
 
-      - name: Claim free games
-        run: |
-          python - <<'PYEOF'
-          import os
-          import requests
+          TOKEN_DATA=""
 
-          EMAIL = os.environ.get('EMAIL', '')
-          REFRESH_TOKEN = os.environ.get('REFRESH_TOKEN', '')
-          EXCHANGE_CODE = os.environ.get('EXCHANGE_CODE', '')
+          # Method 1: Try REFRESH_TOKEN first (persistent)
+          if [ -n "$REFRESH_TOKEN" ]; then
+            echo "Trying REFRESH_TOKEN..."
+            TOKEN_DATA=$(curl -s -X POST "$TOKEN_URL" \
+              -u "${LAUNCHER_ID}:${LAUNCHER_SECRET}" \
+              -d "grant_type=refresh_token&refresh_token=${REFRESH_TOKEN}&token_type=eg1")
+            if echo "$TOKEN_DATA" | grep -q '"access_token"'; then
+              echo "Login successful via REFRESH_TOKEN!"
+            else
+              echo "REFRESH_TOKEN failed: $TOKEN_DATA"
+              TOKEN_DATA=""
+            fi
+          fi
 
-          LAUNCHER_ID = '34a02cf8f4414e29b15921876da36f9'
-          LAUNCHER_SECRET = 'daafbccc737745039dffe53d94fc76cf'
-          WEB_CLIENT_ID = '875a3b57d3a640a6b7f9b4e883463ab4'
-          TOKEN_URL = 'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token'
+          # Method 2: Try authorization_code with web client
+          if [ -z "$TOKEN_DATA" ] && [ -n "$EXCHANGE_CODE" ]; then
+            echo "Trying authorization_code..."
+            TOKEN_DATA=$(curl -s -X POST "$TOKEN_URL" \
+              -u "${WEB_CLIENT_ID}:" \
+              -d "grant_type=authorization_code&code=${EXCHANGE_CODE}&token_type=eg1")
+            if echo "$TOKEN_DATA" | grep -q '"access_token"'; then
+              echo "Login successful via authorization_code!"
+            else
+              echo "authorization_code failed: $TOKEN_DATA"
+              TOKEN_DATA=""
+            fi
+          fi
 
-          token_data = None
+          # Method 3: Try exchange_code with launcher client
+          if [ -z "$TOKEN_DATA" ] && [ -n "$EXCHANGE_CODE" ]; then
+            echo "Trying exchange_code..."
+            TOKEN_DATA=$(curl -s -X POST "$TOKEN_URL" \
+              -u "${LAUNCHER_ID}:${LAUNCHER_SECRET}" \
+              -d "grant_type=exchange_code&exchange_code=${EXCHANGE_CODE}&token_type=eg1")
+            if echo "$TOKEN_DATA" | grep -q '"access_token"'; then
+              echo "Login successful via exchange_code!"
+            else
+              echo "exchange_code failed: $TOKEN_DATA"
+              TOKEN_DATA=""
+            fi
+          fi
 
-          # Method 1: Try refresh_token (persistent, best for scheduled runs)
-          if REFRESH_TOKEN:
-              print('Attempting login with REFRESH_TOKEN...')
-              resp = requests.post(
-                  TOKEN_URL,
-                  auth=(LAUNCHER_ID, LAUNCHER_SECRET),
-                  data={
-                      'grant_type': 'refresh_token',
-                      'refresh_token': REFRESH_TOKEN,
-                      'token_type': 'eg1'
-                  }
-              )
-              if resp.status_code == 200:
-                  token_data = resp.json()
-                  print('Login successful via REFRESH_TOKEN!')
-              else:
-                  print(f'REFRESH_TOKEN login failed: {resp.text}')
+          if [ -z "$TOKEN_DATA" ]; then
+            echo "ERROR: All login methods failed."
+            echo "ACTION: Get fresh authorizationCode from: https://www.epicgames.com/id/api/redirect?clientId=875a3b57d3a640a6b7f9b4e883463ab4&responseType=code"
+            echo "Update EXCHANGE_CODE secret in GitHub and re-run immediately."
+            exit 1
+          fi
 
-          # Method 2: Try authorization_code with web client (from /api/redirect endpoint)
-          if not token_data and EXCHANGE_CODE:
-              print('Attempting login with authorization_code (web client)...')
-              resp = requests.post(
-                  TOKEN_URL,
-                  auth=(WEB_CLIENT_ID, ''),
-                  data={
-                      'grant_type': 'authorization_code',
-                      'code': EXCHANGE_CODE,
-                      'token_type': 'eg1'
-                  }
-              )
-              if resp.status_code == 200:
-                  token_data = resp.json()
-                  print('Login successful via authorization_code!')
-              else:
-                  print(f'authorization_code login failed: {resp.text}')
-                  # Method 3: Try exchange_code with launcher client
-                  print('Attempting login with exchange_code (launcher client)...')
-                  resp2 = requests.post(
-                      TOKEN_URL,
-                      auth=(LAUNCHER_ID, LAUNCHER_SECRET),
-                      data={
-                          'grant_type': 'exchange_code',
-                          'exchange_code': EXCHANGE_CODE,
-                          'token_type': 'eg1'
-                      }
-                  )
-                  if resp2.status_code == 200:
-                      token_data = resp2.json()
-                      print('Login successful via exchange_code!')
-                  else:
-                      print(f'exchange_code login failed: {resp2.text}')
+          ACCESS_TOKEN=$(echo "$TOKEN_DATA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['access_token'])")
+          ACCOUNT_ID=$(echo "$TOKEN_DATA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['account_id'])")
+          NEW_REFRESH=$(echo "$TOKEN_DATA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('refresh_token',''))")
 
-          if not token_data:
-              print('ERROR: All login methods failed.')
-              print('ACTION REQUIRED: Visit https://www.epicgames.com/id/api/redirect?clientId=875a3b57d3a640a6b7f9b4e883463ab4&responseType=code')
-              print('Copy the authorizationCode value and update the EXCHANGE_CODE secret in GitHub.')
-              exit(1)
+          echo "Logged in! Account: $ACCOUNT_ID"
+          if [ -n "$NEW_REFRESH" ]; then
+            echo "SAVE AS REFRESH_TOKEN secret: $NEW_REFRESH"
+          fi
 
-          access_token = token_data['access_token']
-          account_id = token_data['account_id']
-          new_refresh_token = token_data.get('refresh_token', '')
+          # Fetch and claim free games
+          STORE=$(curl -s "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=en-US&country=IN&allowCountries=IN")
+          echo "$STORE" | python3 - <<'PYEOF'
+          import sys, json, subprocess, os
+          store = json.loads(subprocess.check_output(['bash', '-c', 'cat /dev/stdin'], input=os.environ.get('STORE', '').encode() if False else b''))
+          PYEOF
 
-          print(f'Logged in! Account: {account_id}')
-          if new_refresh_token:
-              print(f'SAVE THIS as REFRESH_TOKEN secret: {new_refresh_token}')
+          echo "$STORE" | python3 -c "
+          import sys, json, subprocess
 
-          # Fetch free games
-          store_resp = requests.get(
-              'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions',
-              params={'locale': 'en-US', 'country': 'IN', 'allowCountries': 'IN'}
-          )
-          games = store_resp.json()['data']['Catalog']['searchStore']['elements']
-          headers = {'Authorization': f'Bearer {access_token}'}
+          ACCESS_TOKEN = '$(echo $ACCESS_TOKEN)'
+          store = json.loads(sys.stdin.read())
+          games = store['data']['Catalog']['searchStore']['elements']
 
+          import urllib.request
           claimed = []
           for game in games:
               promotions = game.get('promotions') or {}
@@ -125,18 +102,13 @@ jobs:
                           ns = game.get('namespace')
                           oid = game.get('id')
                           title = game.get('title', 'Unknown')
-                          r = requests.post(
-                              'https://store-launcher.epicgames.com/purchase',
-                              headers=headers,
-                              json={
-                                  'salesChannel': 'Launcher-purchase-client',
-                                  'appStore': 'EpicGames',
-                                  'appType': 'client',
-                                  'offers': [{'offerId': oid, 'namespace': ns}]
-                              }
-                          )
-                          print(f'{title}: {r.status_code}')
+                          data = json.dumps({'salesChannel': 'Launcher-purchase-client', 'appStore': 'EpicGames', 'appType': 'client', 'offers': [{'offerId': oid, 'namespace': ns}]}).encode()
+                          req = urllib.request.Request('https://store-launcher.epicgames.com/purchase', data=data, headers={'Authorization': f'Bearer {ACCESS_TOKEN}', 'Content-Type': 'application/json'})
+                          try:
+                              r = urllib.request.urlopen(req)
+                              print(f'{title}: {r.status}')
+                          except Exception as e:
+                              print(f'{title}: {e}')
                           claimed.append(title)
-
           print(f'Total games processed: {len(claimed)}')
-          PYEOF
+          "
