@@ -1,0 +1,49 @@
+name: "Epic Games Claimer"
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # Daily at 3:00 AM UTC (8:30 AM IST)
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          repository: grbnb/epicgames-claimer
+          path: claimer
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install system dependencies
+        working-directory: claimer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb chromium-browser tzdata ffmpeg ibus-gtk3 libgbm1 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libnss3 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
+
+      - name: Set timezone
+        run: |
+          sudo timedatectl set-timezone Asia/Kolkata
+
+      - name: Install Python dependencies
+        working-directory: claimer
+        run: |
+          pip3 install pyppeteer schedule requests apscheduler==3.7.0
+
+      - name: Run Epic Games Claimer
+        working-directory: claimer
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          VERIFICATION_CODE: ${{ secrets.VERIFICATION_CODE }}
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+          PYPPETEER_NO_DOWNLOAD: '1'
+        run: |
+          chmod +x epicgames_claimer.py
+          xvfb-run --auto-servernum python3 epicgames_claimer.py --email "$EMAIL" --password "$PASSWORD" --once --debug
+          echo "Claim process finished"
